@@ -343,6 +343,57 @@ func (s *testSessionSuite) TestRowLock(c *C) {
 	mustExecSQL(c, se, s.dropDBSQL)
 }
 
+func (s *testSessionSuite) TestIssue827(c *C) {
+	store := newStore(c, s.dbName)
+	se := newSession(c, store, s.dbName)
+	se1 := newSession(c, store, s.dbName)
+
+	mustExecSQL(c, se, "drop table if exists t")
+	c.Assert(se.(*session).txn, IsNil)
+	mustExecSQL(c, se, "create table t (c1 int not null auto_increment, c2 int(30), PRIMARY KEY (c1))")
+	mustExecSQL(c, se, "insert into t (c2) values (1), (2)")
+	mustExecSQL(c, se, "insert into t (c1, c2) values (3, 3)")
+
+	// conflict
+	lastInsertID := se.LastInsertID()
+	mustExecSQL(c, se, "begin")
+	mustExecSQL(c, se, "insert into t (c2) values (11), (12), (13)")
+	rs, err := exec(c, se, "update t set c2 = 33 where c1 = 3")
+	c.Assert(err, IsNil)
+	_, err = GetRows(rs)
+
+	mustExecSQL(c, se1, "begin")
+	mustExecSQL(c, se1, "update t set c2 = 23 where c1 = 3")
+	mustExecSQL(c, se1, "commit")
+
+	_, err = exec(c, se, "commit")
+	c.Assert(err, NotNil)
+	err = se.Retry()
+	c.Assert(err, IsNil)
+
+	// not conflict
+	currLastInsertID := se.LastInsertID()
+	c.Assert(lastInsertID+3, Equals, currLastInsertID)
+
+	//	// not conflict, auto commit
+	//	mustExecSQL(c, se1, "set @@autocommit=1;")
+	//	rs, err = exec(c, se1, "select * from t where c1=11 for update")
+	//	_, err = GetRows(rs)
+	//
+	//	mustExecSQL(c, se2, "begin")
+	//	mustExecSQL(c, se2, "update t set c2=211 where c1=11")
+	//	mustExecSQL(c, se2, "commit")
+	//
+	//	_, err = exec(c, se1, "commit")
+	//	c.Assert(err, IsNil)
+
+	mustExecSQL(c, se, s.dropDBSQL)
+	err = se.Close()
+	c.Assert(err, IsNil)
+	err = se1.Close()
+	c.Assert(err, IsNil)
+}
+
 func (s *testSessionSuite) TestSelectForUpdate(c *C) {
 	store := newStore(c, s.dbName)
 	se := newSession(c, store, s.dbName)
